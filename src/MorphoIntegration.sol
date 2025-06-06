@@ -1,92 +1,17 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/security/ReentrancyGuard.sol";
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-
-// Morpho Blue interfaces
-interface IMorpho {
-    struct MarketParams {
-        address loanToken;
-        address collateralToken;
-        address oracle;
-        address irm;
-        uint256 lltv;
-    }
-
-    struct Market {
-        uint128 totalSupplyAssets;
-        uint128 totalSupplyShares;
-        uint128 totalBorrowAssets;
-        uint128 totalBorrowShares;
-        uint128 lastUpdate;
-        uint128 fee;
-    }
-
-    struct Position {
-        uint256 supplyShares;
-        uint128 borrowShares;
-        uint128 collateral;
-    }
-
-    function supply(
-        MarketParams memory marketParams,
-        uint256 assets,
-        uint256 shares,
-        address onBehalf,
-        bytes calldata data
-    ) external returns (uint256 assetsSupplied, uint256 sharesSupplied);
-
-    function supplyCollateral(
-        MarketParams memory marketParams,
-        uint256 assets,
-        address onBehalf,
-        bytes calldata data
-    ) external;
-
-    function borrow(
-        MarketParams memory marketParams,
-        uint256 assets,
-        uint256 shares,
-        address onBehalf,
-        address receiver
-    ) external returns (uint256 assetsBorrowed, uint256 sharesBorrowed);
-
-    function withdraw(
-        MarketParams memory marketParams,
-        uint256 assets,
-        uint256 shares,
-        address onBehalf,
-        address receiver
-    ) external returns (uint256 assetsWithdrawn, uint256 sharesWithdrawn);
-
-    function withdrawCollateral(
-        MarketParams memory marketParams,
-        uint256 assets,
-        address onBehalf,
-        address receiver
-    ) external;
-
-    function repay(
-        MarketParams memory marketParams,
-        uint256 assets,
-        uint256 shares,
-        address onBehalf,
-        bytes calldata data
-    ) external returns (uint256 assetsRepaid, uint256 sharesRepaid);
-
-    function position(bytes32 id, address user) external view returns (Position memory);
-    function market(bytes32 id) external view returns (Market memory);
-    function idToMarketParams(bytes32 id) external view returns (MarketParams memory);
-}
+import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import { ReentrancyGuard } from "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
+import { IMorpho } from "./IMorpho.sol";
 
 interface IIrm {
-    function borrowRateView(
-        IMorpho.MarketParams memory marketParams,
-        IMorpho.Market memory market
-    ) external view returns (uint256);
+    function borrowRateView(IMorpho.MarketParams memory marketParams, IMorpho.Market memory market)
+        external
+        view
+        returns (uint256);
 }
 
 /**
@@ -132,21 +57,21 @@ contract MorphoIntegration is ReentrancyGuard, Ownable {
      * @param assets Amount of loan tokens to supply
      * @param minShares Minimum shares to receive (slippage protection)
      */
-    function supplyWithProtection(
-        IMorpho.MarketParams memory marketParams,
-        uint256 assets,
-        uint256 minShares
-    ) external nonReentrant returns (uint256 assetsSupplied, uint256 sharesSupplied) {
+    function supplyWithProtection(IMorpho.MarketParams memory marketParams, uint256 assets, uint256 minShares)
+        external
+        nonReentrant
+        returns (uint256 assetsSupplied, uint256 sharesSupplied)
+    {
         if (assets == 0) revert ZeroAmount();
-        
+
         _validateMarketParams(marketParams);
-        
+
         // Transfer tokens from user
         IERC20(marketParams.loanToken).safeTransferFrom(msg.sender, address(this), assets);
-        
+
         // Approve Morpho to spend tokens
         IERC20(marketParams.loanToken).safeApprove(address(morpho), assets);
-        
+
         // Execute supply
         (assetsSupplied, sharesSupplied) = morpho.supply(
             marketParams,
@@ -155,14 +80,14 @@ contract MorphoIntegration is ReentrancyGuard, Ownable {
             msg.sender,
             ""
         );
-        
+
         // Slippage protection
         require(sharesSupplied >= minShares, "Insufficient shares received");
-        
+
         // Update efficiency metrics
         bytes32 marketId = _getMarketId(marketParams);
         _updateEfficiencyMetrics(marketId, assetsSupplied);
-        
+
         emit SupplyExecuted(marketId, msg.sender, assetsSupplied, sharesSupplied);
     }
 
@@ -171,23 +96,20 @@ contract MorphoIntegration is ReentrancyGuard, Ownable {
      * @param marketParams The market parameters
      * @param assets Amount of collateral tokens to supply
      */
-    function supplyCollateralSecure(
-        IMorpho.MarketParams memory marketParams,
-        uint256 assets
-    ) external nonReentrant {
+    function supplyCollateralSecure(IMorpho.MarketParams memory marketParams, uint256 assets) external nonReentrant {
         if (assets == 0) revert ZeroAmount();
-        
+
         _validateMarketParams(marketParams);
-        
+
         // Transfer collateral from user
         IERC20(marketParams.collateralToken).safeTransferFrom(msg.sender, address(this), assets);
-        
+
         // Approve Morpho
         IERC20(marketParams.collateralToken).safeApprove(address(morpho), assets);
-        
+
         // Supply collateral
         morpho.supplyCollateral(marketParams, assets, msg.sender, "");
-        
+
         bytes32 marketId = _getMarketId(marketParams);
         emit CollateralSupplied(marketId, msg.sender, assets);
     }
@@ -198,37 +120,28 @@ contract MorphoIntegration is ReentrancyGuard, Ownable {
      * @param assets Amount to borrow
      * @param maxHealthFactor Maximum allowed health factor (scaled by 1e18)
      */
-    function borrowWithHealthCheck(
-        IMorpho.MarketParams memory marketParams,
-        uint256 assets,
-        uint256 maxHealthFactor
-    ) external nonReentrant returns (uint256 assetsBorrowed, uint256 sharesBorrowed) {
+    function borrowWithHealthCheck(IMorpho.MarketParams memory marketParams, uint256 assets, uint256 maxHealthFactor)
+        external
+        nonReentrant
+        returns (uint256 assetsBorrowed, uint256 sharesBorrowed)
+    {
         if (assets == 0) revert ZeroAmount();
-        
+
         _validateMarketParams(marketParams);
-        
+
         // Check current position
         bytes32 marketId = _getMarketId(marketParams);
         IMorpho.Position memory position = morpho.position(marketId, msg.sender);
-        
+
         // Validate sufficient collateral (simplified health factor check)
         uint256 collateralValue = position.collateral; // In practice, would use oracle
         uint256 borrowValue = assets; // In practice, would use oracle
-        
-        require(
-            collateralValue * marketParams.lltv / 1e18 >= borrowValue,
-            "Insufficient collateral"
-        );
-        
+
+        require(collateralValue * marketParams.lltv / 1e18 >= borrowValue, "Insufficient collateral");
+
         // Execute borrow
-        (assetsBorrowed, sharesBorrowed) = morpho.borrow(
-            marketParams,
-            assets,
-            0,
-            msg.sender,
-            msg.sender
-        );
-        
+        (assetsBorrowed, sharesBorrowed) = morpho.borrow(marketParams, assets, 0, msg.sender, msg.sender);
+
         emit BorrowExecuted(marketId, msg.sender, assetsBorrowed, sharesBorrowed);
     }
 
@@ -240,9 +153,9 @@ contract MorphoIntegration is ReentrancyGuard, Ownable {
     function calculateEfficiency(bytes32 marketId) public view returns (uint256 efficiency) {
         EfficiencyMetrics memory metrics = marketEfficiency[marketId];
         uint256 totalVolume = metrics.totalP2PVolume + metrics.totalPoolVolume;
-        
+
         if (totalVolume == 0) return 0;
-        
+
         efficiency = (metrics.totalP2PVolume * 100) / totalVolume;
     }
 
@@ -253,13 +166,11 @@ contract MorphoIntegration is ReentrancyGuard, Ownable {
      * @return efficiency Current efficiency percentage
      * @return borrowRate Current borrow rate
      */
-    function getMarketInfo(
-        IMorpho.MarketParams memory marketParams
-    ) external view returns (
-        IMorpho.Market memory market,
-        uint256 efficiency,
-        uint256 borrowRate
-    ) {
+    function getMarketInfo(IMorpho.MarketParams memory marketParams)
+        external
+        view
+        returns (IMorpho.Market memory market, uint256 efficiency, uint256 borrowRate)
+    {
         bytes32 marketId = _getMarketId(marketParams);
         market = morpho.market(marketId);
         efficiency = calculateEfficiency(marketId);
@@ -278,7 +189,7 @@ contract MorphoIntegration is ReentrancyGuard, Ownable {
         if (marketParams.oracle == address(0)) revert InvalidMarketParams();
         if (marketParams.irm == address(0)) revert InvalidMarketParams();
         if (marketParams.lltv == 0 || marketParams.lltv > 1e18) revert InvalidMarketParams();
-        
+
         _validateIRM(marketParams.irm);
     }
 
@@ -307,13 +218,13 @@ contract MorphoIntegration is ReentrancyGuard, Ownable {
      */
     function _updateEfficiencyMetrics(bytes32 marketId, uint256 volume) internal {
         EfficiencyMetrics storage metrics = marketEfficiency[marketId];
-        
+
         // Simplified P2P detection logic
         // In practice, would analyze actual P2P matching from Morpho events
         metrics.totalP2PVolume += volume / 2; // Assume 50% P2P for demo
         metrics.totalPoolVolume += volume / 2; // Assume 50% pool for demo
         metrics.lastUpdateTimestamp = block.timestamp;
-        
+
         uint256 efficiency = calculateEfficiency(marketId);
         emit EfficiencyUpdated(marketId, efficiency);
     }
