@@ -7,9 +7,15 @@
         "editor.formatOnSave": true,
         "editor.formatOnPaste": true,
         "editor.tabSize": 4,
-        "editor.insertSpaces": true
+        "editor.insertSpaces": true,
+        "editor.semanticHighlighting.enabled": true
     },
     "files.associations": {
         "*.sol": "solidity"
+    },
+    "editor.semanticHighlighting.enabled": true,
+    "workbench.colorCustomizations": {
+        "editor.selectionBackground": "#264f78",
+        "editor.selectionHighlightBackground": "#264f78"
     }
 } 
