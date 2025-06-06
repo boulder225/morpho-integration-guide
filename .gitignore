@@ -8,7 +8,8 @@ broadcast/
 .env.local
 
 # IDE
-.vscode/
+.vscode/*
+!.vscode/settings.json
 .idea/
 
 # Node modules (if using npm for docs)
