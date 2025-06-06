@@ -66,11 +66,16 @@ contract MorphoIntegration is ReentrancyGuard, Ownable {
 
         _validateMarketParams(marketParams);
 
-        // Transfer tokens from user
-        IERC20(marketParams.loanToken).safeTransferFrom(msg.sender, address(this), assets);
+        bytes32 marketId = _getMarketId(marketParams);
 
-        // Approve Morpho to spend tokens
-        IERC20(marketParams.loanToken).safeApprove(address(morpho), assets);
+        // Transfer tokens from user
+        IERC20 loanToken = IERC20(marketParams.loanToken);
+        loanToken.safeTransferFrom(msg.sender, address(this), assets);
+
+        // Approve Morpho to spend tokens only if needed
+        if (loanToken.allowance(address(this), address(morpho)) < assets) {
+            loanToken.safeApprove(address(morpho), type(uint256).max);
+        }
 
         // Execute supply
         (assetsSupplied, sharesSupplied) = morpho.supply(
@@ -84,9 +89,13 @@ contract MorphoIntegration is ReentrancyGuard, Ownable {
         // Slippage protection
         require(sharesSupplied >= minShares, "Insufficient shares received");
 
-        // Update efficiency metrics
-        bytes32 marketId = _getMarketId(marketParams);
-        _updateEfficiencyMetrics(marketId, assetsSupplied);
+        // Update efficiency metrics - use unchecked for gas optimization
+        unchecked {
+            EfficiencyMetrics storage metrics = marketEfficiency[marketId];
+            metrics.totalP2PVolume += assetsSupplied / 2; // Assume 50% P2P for demo
+            metrics.totalPoolVolume += assetsSupplied / 2; // Assume 50% pool for demo
+            metrics.lastUpdateTimestamp = block.timestamp;
+        }
 
         emit SupplyExecuted(marketId, msg.sender, assetsSupplied, sharesSupplied);
     }
@@ -101,16 +110,20 @@ contract MorphoIntegration is ReentrancyGuard, Ownable {
 
         _validateMarketParams(marketParams);
 
-        // Transfer collateral from user
-        IERC20(marketParams.collateralToken).safeTransferFrom(msg.sender, address(this), assets);
+        bytes32 marketId = _getMarketId(marketParams);
 
-        // Approve Morpho
-        IERC20(marketParams.collateralToken).safeApprove(address(morpho), assets);
+        // Transfer collateral from user
+        IERC20 collateralToken = IERC20(marketParams.collateralToken);
+        collateralToken.safeTransferFrom(msg.sender, address(this), assets);
+
+        // Approve Morpho only if needed
+        if (collateralToken.allowance(address(this), address(morpho)) < assets) {
+            collateralToken.safeApprove(address(morpho), type(uint256).max);
+        }
 
         // Supply collateral
         morpho.supplyCollateral(marketParams, assets, msg.sender, "");
 
-        bytes32 marketId = _getMarketId(marketParams);
         emit CollateralSupplied(marketId, msg.sender, assets);
     }
 
